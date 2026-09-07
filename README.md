@@ -20,6 +20,19 @@ Requires:
 
 Leave the built-in AI icon where it is. After the first scan, click it and switch to **Cursor**.
 
+## Update
+
+Version 1.0.1 restores collection on Omarchy versions that omit internal paths
+from third-party plugin manifests. It also works with older Omarchy versions.
+
+```sh
+omarchy plugin update io.github.mrlarsendk.cursor-usage --yes
+omarchy restart shell
+```
+
+The shell restart loads the updated collector service, which stays loaded during
+ordinary plugin rescans.
+
 ## Usage
 
 - Left click the existing AI icon: usage panel
