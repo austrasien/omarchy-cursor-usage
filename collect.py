@@ -451,6 +451,47 @@ def number(value: Any) -> int:
     return 0
 
 
+def format_usd_cents(value: int) -> str:
+  return f"${max(0, number(value)) / 100:.2f}"
+
+
+def build_on_demand_limit(payload: Any, reset_at: str) -> dict[str, Any] | None:
+  if not isinstance(payload, dict):
+    return None
+
+  limit_type = str(payload.get("limitType") or "").strip().lower()
+  if limit_type in ("team", "pooled"):
+    buckets = [("pooledLimit", "pooledUsed", "pooledRemaining")]
+  elif limit_type in ("user", "individual"):
+    buckets = [("individualLimit", "individualUsed", "individualRemaining")]
+  else:
+    buckets = [
+      ("individualLimit", "individualUsed", "individualRemaining"),
+      ("pooledLimit", "pooledUsed", "pooledRemaining"),
+    ]
+
+  for limit_key, used_key, remaining_key in buckets:
+    limit = max(0, number(payload.get(limit_key)))
+    if limit <= 0:
+      continue
+
+    if used_key in payload:
+      used = max(0, number(payload.get(used_key)))
+    elif remaining_key in payload:
+      used = max(0, limit - max(0, number(payload.get(remaining_key))))
+    else:
+      # Some Cursor responses expose only the aggregate spend for this block.
+      used = max(0, number(payload.get("totalSpend")))
+
+    return {
+      "label": "On-Demand",
+      "title": f"On-Demand · {format_usd_cents(used)} / {format_usd_cents(limit)}",
+      "percent": used / limit,
+      "resetsAt": reset_at,
+    }
+  return None
+
+
 def date_string(value: date) -> str:
   return value.strftime("%Y-%m-%d")
 
@@ -586,7 +627,6 @@ def build_rate_limits(payload: Any, tier_label: str) -> dict[str, Any]:
 
   reset_at = parse_billing_cycle_end(payload.get("billingCycleEnd"))
   membership = format_tier(tier_label) or format_tier(payload.get("membershipType"))
-  total_percent = percent_to_fraction(plan.get("totalPercentUsed"))
   auto_percent = percent_to_fraction(plan.get("autoPercentUsed"))
   api_percent = percent_to_fraction(plan.get("apiPercentUsed"))
   # Treat a missing pool as 0% used when the plan object itself is present,
@@ -597,12 +637,13 @@ def build_rate_limits(payload: Any, tier_label: str) -> dict[str, Any]:
     api_percent = 0.0
 
   limits: list[dict[str, Any]] = []
-  if total_percent >= 0:
-    limits.append({"label": "Included total", "percent": total_percent, "resetsAt": reset_at})
   if auto_percent >= 0:
     limits.append({"label": "Cursor Models", "percent": auto_percent, "resetsAt": reset_at})
   if api_percent >= 0:
     limits.append({"label": "Other Models", "percent": api_percent, "resetsAt": reset_at})
+  on_demand = build_on_demand_limit(payload.get("spendLimitUsage"), reset_at)
+  if on_demand is not None:
+    limits.append(on_demand)
 
   return empty_result(
     ready=len(limits) > 0,

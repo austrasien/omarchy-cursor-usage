@@ -178,6 +178,63 @@ class CacheTest(TempDirTest):
     self.assertGreater(collect.MAX_LOCAL_JSON_BYTES, 50 * 3570)
 
 
+class RateLimitsTest(unittest.TestCase):
+  def test_adds_individual_on_demand_usage_after_other_models(self):
+    record = collect.build_rate_limits(
+      {
+        "billingCycleEnd": "2026-09-24T10:06:44Z",
+        "planUsage": {
+          "totalPercentUsed": 20,
+          "autoPercentUsed": 10,
+          "apiPercentUsed": 30,
+        },
+        "spendLimitUsage": {
+          "limitType": "user",
+          "individualLimit": 5000,
+          "individualUsed": 1250,
+          "individualRemaining": 3750,
+        },
+      },
+      "Pro+",
+    )
+    on_demand = record["limits"][-1]
+    self.assertEqual(on_demand["label"], "On-Demand")
+    self.assertEqual(on_demand["title"], "On-Demand · $12.50 / $50.00")
+    self.assertEqual(on_demand["percent"], 0.25)
+
+  def test_derives_zero_usage_when_cursor_omits_the_zero_field(self):
+    limit = collect.build_on_demand_limit(
+      {"limitType": "user", "individualLimit": 5000, "individualRemaining": 5000},
+      "",
+    )
+    self.assertEqual(limit["title"], "On-Demand · $0.00 / $50.00")
+    self.assertEqual(limit["percent"], 0)
+
+  def test_uses_the_team_pool_for_a_team_limit(self):
+    limit = collect.build_on_demand_limit(
+      {
+        "limitType": "team",
+        "pooledLimit": 20000,
+        "pooledUsed": 5000,
+        "individualLimit": 1000,
+        "individualUsed": 1000,
+      },
+      "",
+    )
+    self.assertEqual(limit["title"], "On-Demand · $50.00 / $200.00")
+    self.assertEqual(limit["percent"], 0.25)
+
+  def test_does_not_add_on_demand_without_a_configured_limit(self):
+    record = collect.build_rate_limits(
+      {
+        "planUsage": {"totalPercentUsed": 20},
+        "spendLimitUsage": {"limitType": "user", "individualUsed": 1250},
+      },
+      "Pro",
+    )
+    self.assertEqual([limit["label"] for limit in record["limits"]], ["Cursor Models", "Other Models"])
+
+
 class WriteJsonTest(TempDirTest):
   def test_writes_content_at_mode_0600(self):
     target = self.tmp / "state" / "cursor.json"

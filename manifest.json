@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.mrlarsendk.cursor-usage",
   "name": "Cursor Usage",
-  "version": "1.0.1",
-  "author": "mrlarsendk",
+  "version": "1.1.0",
+  "author": "Michael Larsen (mrlarsendk), fork by austrasien",
   "license": "MIT",
-  "description": "Adds Cursor to Omarchy's existing AI toolbar widget (the stock AI icon), not a new bar icon.",
+  "description": "Cursor plan limits, On-Demand spend, and token history inside Omarchy's existing AI toolbar widget (austrasien fork).",
   "kinds": ["service"],
   "keepLoaded": true,
   "entryPoints": {

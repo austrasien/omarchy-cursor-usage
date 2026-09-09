@@ -25,11 +25,6 @@ Item {
     collectProcess.running = true
   }
 
-  function clearRecord() {
-    clearProcess.command = ["python3", collector, "--clear"]
-    clearProcess.running = true
-  }
-
   Timer {
     interval: 300000
     running: true
@@ -55,11 +50,4 @@ Item {
       onStreamFinished: if (text.trim() !== "") console.warn("cursor-usage", text.trim())
     }
   }
-
-  Process {
-    id: clearProcess
-    running: false
-  }
-
-  Component.onDestruction: root.clearRecord()
 }

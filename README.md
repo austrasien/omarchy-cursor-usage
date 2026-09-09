@@ -1,61 +1,123 @@
-# Cursor Usage
+# Omarchy Cursor Usage
 
-Adds **Cursor** to Omarchy's **existing AI toolbar widget** — the AI icon already on the top bar. It does not add a second icon.
+A **headless Omarchy plugin** that adds Cursor plan limits, On-Demand spend,
+daily tokens, and model usage to the AI widget already in your top bar.
 
-After install, click that same AI button. You get a **Cursor** chip next to **Claude Code** (and Codex / Grok / Fireworks if you use them): plan meters (Included / Cursor Models / Other Models) and token charts from Cursor's dashboard APIs.
+> **Built for Omarchy:** no second bar icon and no separate dashboard. Install,
+> click the existing AI robot, then select **Cursor**.
 
-![Cursor usage panel in Omarchy](preview.png)
+![Cursor usage panel in Omarchy](preview.svg)
 
-## Install
+---
 
-```sh
-omarchy plugin add https://github.com/mrlarsendk/omarchy-cursor-usage.git --enable
+### ☕ Support the Project
+If this keeps you from repeatedly opening Cursor's billing dashboard, a tip is
+always appreciated.
+
+[![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?style=for-the-badge&logo=paypal)](https://paypal.me/austraz)
+
+---
+
+### 💬 Feedback & Community
+Found a bug or a Cursor API change? Open an
+[**issue**](https://github.com/austrasien/omarchy-cursor-usage/issues).
+
+---
+
+## 🚀 Overview
+
+The plugin reads your existing local Cursor login, requests account usage from
+Cursor's dashboard APIs, and writes one private local snapshot for Omarchy's
+stock AI panel.
+
+```text
+Cursor local login → Cursor dashboard API → private usage snapshot → Omarchy AI panel
 ```
 
-Requires:
+| | Without | With Omarchy Cursor Usage |
+| :--- | :--- | :--- |
+| Plan limits | Open the Cursor dashboard | Cursor Models + Other Models meters |
+| On-Demand | Check billing settings manually | Current spend against your configured cap |
+| Token history | Browse usage pages | Seven days + top models in the bar panel |
+| Shell reload | Panel can disappear temporarily | Last valid snapshot stays visible |
 
-- Omarchy with the stock AI widget enabled (`omarchy.agents`, on by default)
-- Python 3 on `PATH` (stdlib only)
-- Cursor IDE signed in, or Cursor Agent signed in (`cursor-agent login`)
+## ✨ Key Features
 
-Leave the built-in AI icon where it is. After the first scan, click it and switch to **Cursor**.
+### 📊 Limits that match how you use Cursor
+- Separate **Cursor Models** and **Other Models** meters.
+- Optional **On-Demand** meter showing current spend and your configured
+  individual or team limit.
+- The redundant combined “Included total” meter is intentionally omitted.
 
-## Update
+### 📈 Token history
+- Seven-day token chart.
+- All-time breakdown for the four most-used models.
+- Today’s prompts and sessions when Cursor exposes them.
 
-Version 1.0.1 restores collection on Omarchy versions that omit internal paths
-from third-party plugin manifests. It also works with older Omarchy versions.
+### 🧩 Native Omarchy integration
+- Reuses `omarchy.agents`; the plugin itself has no bar widget.
+- Refreshes every five minutes and follows manual AI-panel refreshes.
+- Keeps the last snapshot across shell/plugin reloads to avoid flicker.
+- Resolves its collector beside the service, including on Omarchy versions
+  that sanitize internal manifest paths.
+- Python standard library only.
+
+## 🛠 Installation
+
+Requirements:
+
+- Omarchy with `omarchy.agents` enabled
+- Python 3
+- Cursor IDE signed in, or Cursor Agent signed in with `cursor-agent login`
+
+Install:
 
 ```sh
-omarchy plugin update io.github.mrlarsendk.cursor-usage --yes
+omarchy plugin add https://github.com/austrasien/omarchy-cursor-usage.git --enable
+```
+
+Click the existing AI icon and select **Cursor**. Press `r` or Enter in the
+panel to refresh.
+
+### Switching from the upstream repository
+
+```sh
+cd ~/.config/omarchy/plugins/io.github.mrlarsendk.cursor-usage
+git remote set-url origin https://github.com/austrasien/omarchy-cursor-usage.git
+git pull
 omarchy restart shell
 ```
 
-The shell restart loads the updated collector service, which stays loaded during
-ordinary plugin rescans.
+## 🔐 Privacy & Security
 
-## Usage
+- Credentials are read locally from Cursor IDE's `state.vscdb`, with
+  `~/.config/cursor/auth.json` as the Cursor Agent fallback.
+- The token is sent only to `https://api2.cursor.sh` in the Authorization
+  header. It is never printed or written to the usage snapshot.
+- API redirects are refused so credentials cannot be forwarded to another
+  origin.
+- Local credential/cache reads reject symlinks and oversized files.
+- `cursor.json` is atomically written with mode `0600`.
 
-- Left click the existing AI icon: usage panel
-- Switch to **Cursor** with the chip in the panel (or middle-click the icon)
-- `r` or Enter in the panel: refresh (Cursor follows the stock update)
-- Cursor also refreshes about every 5 minutes
+This integration uses Cursor's dashboard endpoints. Expired credentials are
+not refreshed by the plugin; open Cursor or run `cursor-agent login`.
 
-This plugin is a headless service. It only writes a Cursor usage record for the stock panel to display.
-
-Plan meters come from Cursor's `GetCurrentPeriodUsage` / `GetPlanInfo` APIs. Day and model charts come from paged `GetFilteredUsageEvents`. Auth is read from the Cursor IDE `state.vscdb`, or from `~/.config/cursor/auth.json` after `cursor-agent login`.
-
-## Remove
+## 🗑 Removal
 
 ```sh
 omarchy plugin remove io.github.mrlarsendk.cursor-usage
+rm -f ~/.local/state/omarchy/agents/usage/cursor.json
 ```
 
-Removal deletes the plugin checkout and drops `~/.local/state/omarchy/agents/usage/cursor.json`, so the Cursor chip leaves the stock AI panel. It does not change Cursor login files or agent sessions.
+The second command removes the retained usage snapshot and therefore the
+Cursor chip. Login files and Cursor sessions are never modified.
 
-## Privacy
+## ⚖️ License & Credits
 
-The collector reads the local Cursor sign-in, then calls Cursor's dashboard usage endpoints. It never logs tokens. Expired tokens are not refreshed; open Cursor or run `cursor-agent login` to renew them.
+Licensed under the **MIT License**.
 
-## License
-
-MIT. See [LICENSE](LICENSE).
+Based on
+[mrlarsendk/omarchy-cursor-usage](https://github.com/mrlarsendk/omarchy-cursor-usage)
+by Michael Larsen. This fork keeps the upstream copyright and license;
+On-Demand metering, persistent snapshots, UI-focused limit selection, and
+publication packaging by [austrasien](https://github.com/austrasien).

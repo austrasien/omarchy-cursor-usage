@@ -56,7 +56,6 @@ ShellRoot {
       if (records.length > root.stage) {
         root.stage = records.length
         if (root.stage === 1) root.service.collect(true)
-        else if (root.stage === 2) root.service.clearRecord()
         else Qt.quit()
       }
     }
@@ -73,8 +72,8 @@ ShellRoot {
         result = subprocess.run(["quickshell", "--no-color", "-p", str(harness)],
                                 env=env, text=True, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(json.loads(calls.read_text())[:3],
-                         [["--write"], ["--write", "--force"], ["--clear"]],
+        self.assertEqual(json.loads(calls.read_text())[:2],
+                         [["--write"], ["--write", "--force"]],
                          result.stdout + result.stderr)
 
 
