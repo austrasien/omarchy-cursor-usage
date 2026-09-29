@@ -34,6 +34,13 @@ from typing import Any
 AGENT_ID = "cursor"
 AGENT_NAME = "Cursor"
 AUTH_HELP = "Open Cursor and sign in, or run `cursor-agent login`."
+# Exit 75 (EX_TEMPFAIL) tells Service.qml to retry in 30s. It is not written
+# into the record: the agents panel would otherwise call
+# omarchy-agent-usage-update, which has no Cursor collector.
+RETRY_EXIT = 75
+UNREACHABLE_HELP = "Could not reach Cursor usage API."
+NO_QUOTA_STATUS = "No per-user Cursor quota"
+NO_QUOTA_HELP = "This Cursor account does not expose a per-user quota."
 API_BASE = "https://api2.cursor.sh/aiserver.v1.DashboardService"
 PERIOD_PATH = "GetCurrentPeriodUsage"
 PLAN_PATH = "GetPlanInfo"
@@ -430,6 +437,42 @@ def format_tier(value: Any) -> str:
   return safe_label(titled, MAX_TIER_LABEL, fallback="")
 
 
+def unlimited_tier(label: str) -> str:
+  text = format_tier(label)
+  if not text:
+    return "Unlimited"
+  if "unlimited" in text.lower():
+    return text
+  return f"{text} · unlimited"
+
+
+def period_identifies_account(payload: dict[str, Any]) -> bool:
+  # A real period payload still names the cycle or the plan when a team seat
+  # has no personal pools. An empty or unrelated object does not.
+  if payload.get("billingCycleEnd") or payload.get("billingCycleStart"):
+    return True
+  if str(payload.get("membershipType") or "").strip():
+    return True
+  return payload.get("enabled") is True
+
+
+def is_unlimited_period(payload: dict[str, Any], plan: Any) -> bool:
+  if payload.get("isUnlimited") is True:
+    return True
+  return isinstance(plan, dict) and plan.get("isUnlimited") is True
+
+
+def no_quota_result(tier_label: str) -> dict[str, Any]:
+  # ready stays true so the token charts still attach. The status replaces
+  # the plan line; it is not a failed request.
+  return empty_result(
+    ready=True,
+    tierLabel=format_tier(tier_label),
+    usageStatusText=NO_QUOTA_STATUS,
+    authHelpText=NO_QUOTA_HELP,
+  )
+
+
 def percent_to_fraction(value: Any) -> float:
   if value is None:
     return -1.0
@@ -560,10 +603,17 @@ def api_post(
       usageStatusText="Cursor limits unavailable",
       authHelpText="Usage API response was too large.",
     )
+  except (urllib.error.URLError, TimeoutError, OSError):
+    # DNS, timeout, or no route. Service.qml retries this exit; a 401 does not.
+    return None, empty_result(
+      usageStatusText="Cursor limits unavailable",
+      authHelpText=UNREACHABLE_HELP,
+      _retry=True,
+    )
   except Exception:
     return None, empty_result(
       usageStatusText="Cursor limits unavailable",
-      authHelpText="Could not reach Cursor usage API.",
+      authHelpText=UNREACHABLE_HELP,
     )
 
   if status < 200 or status >= 300:
@@ -617,39 +667,37 @@ def build_rate_limits(payload: Any, tier_label: str) -> dict[str, Any]:
       tierLabel=format_tier(tier_label),
     )
 
+  reset_at = parse_billing_cycle_end(payload.get("billingCycleEnd"))
+  membership = format_tier(tier_label) or format_tier(payload.get("membershipType"))
   plan = payload.get("planUsage")
+  if is_unlimited_period(payload, plan):
+    return empty_result(ready=True, tierLabel=unlimited_tier(membership))
+
   if not isinstance(plan, dict):
+    if period_identifies_account(payload):
+      return no_quota_result(membership)
     return empty_result(
       usageStatusText="Cursor limits unavailable",
       authHelpText="Usage response did not include plan usage.",
-      tierLabel=format_tier(tier_label),
+      tierLabel=membership,
     )
 
-  reset_at = parse_billing_cycle_end(payload.get("billingCycleEnd"))
-  membership = format_tier(tier_label) or format_tier(payload.get("membershipType"))
+  # A missing pool is omitted. Forcing it to 0% paints an empty meter on an
+  # unlimited plan or a team seat that never had that pool.
   auto_percent = percent_to_fraction(plan.get("autoPercentUsed"))
   api_percent = percent_to_fraction(plan.get("apiPercentUsed"))
-  # Treat a missing pool as 0% used when the plan object itself is present,
-  # so a signed-in Cursor account still surfaces in the bar.
-  if auto_percent < 0 and plan.get("autoPercentUsed") is None:
-    auto_percent = 0.0
-  if api_percent < 0 and plan.get("apiPercentUsed") is None:
-    api_percent = 0.0
 
   limits: list[dict[str, Any]] = []
   if auto_percent >= 0:
-    limits.append({"label": "Cursor Models", "percent": auto_percent, "resetsAt": reset_at})
+    limits.append({"label": "Cursor Models", "title": "Cursor Models", "percent": auto_percent, "resetsAt": reset_at})
   if api_percent >= 0:
-    limits.append({"label": "Other Models", "percent": api_percent, "resetsAt": reset_at})
+    limits.append({"label": "Other Models", "title": "Other Models", "percent": api_percent, "resetsAt": reset_at})
   on_demand = build_on_demand_limit(payload.get("spendLimitUsage"), reset_at)
   if on_demand is not None:
     limits.append(on_demand)
-
-  return empty_result(
-    ready=len(limits) > 0,
-    limits=limits,
-    tierLabel=membership,
-  )
+  if limits:
+    return empty_result(ready=True, limits=limits, tierLabel=membership)
+  return no_quota_result(membership)
 
 
 def event_token_usage(event: dict[str, Any]) -> dict[str, int]:
@@ -800,7 +848,9 @@ def collect_record(access_token: str, membership: str | None, limits_only: bool)
 
   tier = fetch_plan_tier(access_token, membership)
   record = build_rate_limits(period, tier)
-  if record.get("usageStatusText"):
+  # Unlimited and no-per-user-quota are successful parses: keep going so the
+  # day and model charts still land on the record. A failed limits call stops.
+  if record.get("usageStatusText") and not record.get("ready"):
     return record
 
   # Opening the panel refreshes with --limits-only. Keep the last day/model
@@ -882,11 +932,12 @@ def main(argv: list[str] | None = None) -> int:
       args.limits_only,
     )
 
+  retry = bool(record.pop("_retry", False))
   if args.write:
     write_json(usage_record_path(), record)
   else:
     print(json.dumps(record, separators=(",", ":"), sort_keys=True))
-  return 0
+  return RETRY_EXIT if retry else 0
 
 
 if __name__ == "__main__":

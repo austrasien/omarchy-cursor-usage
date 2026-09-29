@@ -8,6 +8,7 @@ swapping something in. Run with: python3 -m unittest test_collect -v
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sqlite3
@@ -15,7 +16,9 @@ import stat
 import tempfile
 import time
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest import mock
 
 import collect
 
@@ -227,12 +230,89 @@ class RateLimitsTest(unittest.TestCase):
   def test_does_not_add_on_demand_without_a_configured_limit(self):
     record = collect.build_rate_limits(
       {
-        "planUsage": {"totalPercentUsed": 20},
+        "planUsage": {"totalPercentUsed": 20, "autoPercentUsed": 10, "apiPercentUsed": 30},
         "spendLimitUsage": {"limitType": "user", "individualUsed": 1250},
       },
       "Pro",
     )
     self.assertEqual([limit["label"] for limit in record["limits"]], ["Cursor Models", "Other Models"])
+
+  def test_a_missing_pool_is_omitted(self):
+    record = collect.build_rate_limits(
+      {"billingCycleEnd": "2026-09-24T10:06:44Z", "planUsage": {"autoPercentUsed": 10}},
+      "Pro",
+    )
+    self.assertEqual([limit["label"] for limit in record["limits"]], ["Cursor Models"])
+    self.assertEqual(record["usageStatusText"], "")
+
+  def test_a_present_zero_stays_a_meter(self):
+    record = collect.build_rate_limits(
+      {"planUsage": {"autoPercentUsed": 0, "apiPercentUsed": 0}},
+      "Pro",
+    )
+    self.assertEqual([limit["percent"] for limit in record["limits"]], [0, 0])
+
+  def test_an_unlimited_plan_has_no_meters(self):
+    record = collect.build_rate_limits(
+      {
+        "isUnlimited": True,
+        "billingCycleEnd": "2026-09-24T10:06:44Z",
+        "planUsage": {"autoPercentUsed": 0, "apiPercentUsed": 0},
+      },
+      "pro",
+    )
+    self.assertEqual(record["limits"], [])
+    self.assertEqual(record["tierLabel"], "Pro · unlimited")
+    self.assertTrue(record["ready"])
+    self.assertEqual(record["usageStatusText"], "")
+
+  def test_a_period_without_pools_says_there_is_no_per_user_quota(self):
+    record = collect.build_rate_limits(
+      {"billingCycleEnd": "2026-09-24T10:06:44Z", "membershipType": "enterprise"},
+      "enterprise",
+    )
+    self.assertEqual(record["limits"], [])
+    self.assertTrue(record["ready"])
+    self.assertEqual(record["usageStatusText"], collect.NO_QUOTA_STATUS)
+    self.assertEqual(record["tierLabel"], "Enterprise")
+
+  def test_an_empty_payload_stays_unavailable(self):
+    record = collect.build_rate_limits({}, "Pro")
+    self.assertFalse(record["ready"])
+    self.assertIn("plan usage", record["authHelpText"])
+
+
+class ApiReachabilityTest(unittest.TestCase):
+  def test_a_dead_route_asks_for_a_short_retry(self):
+    with mock.patch.object(collect, "dashboard_urlopen", side_effect=urllib.error.URLError("no route")):
+      payload, error = collect.api_post("token", "GetCurrentPeriodUsage", {})
+    self.assertIsNone(payload)
+    self.assertTrue(error.pop("_retry"))
+    self.assertEqual(error["authHelpText"], collect.UNREACHABLE_HELP)
+    self.assertNotIn("_retry", error)
+
+  def test_an_expired_session_does_not_retry(self):
+    denied = urllib.error.HTTPError(
+      "https://api2.cursor.sh", 401, "denied", hdrs=None, fp=io.BytesIO(b"")
+    )
+    with mock.patch.object(collect, "dashboard_urlopen", side_effect=denied):
+      _, error = collect.api_post("token", "GetCurrentPeriodUsage", {})
+    self.assertNotIn("_retry", error)
+    self.assertEqual(error["usageStatusText"], "Sign in to Cursor")
+
+  def test_retry_exits_75_and_stays_out_of_the_record(self):
+    record = collect.empty_result(_retry=True, authHelpText=collect.UNREACHABLE_HELP)
+    with tempfile.TemporaryDirectory() as tmp:
+      target = Path(tmp) / "cursor.json"
+      with (
+        mock.patch.object(collect, "load_credentials", return_value=({"accessToken": "t"}, None)),
+        mock.patch.object(collect, "collect_record", return_value=record),
+        mock.patch.object(collect, "usage_record_path", return_value=target),
+      ):
+        code = collect.main(["--write"])
+      written = json.loads(target.read_text())
+    self.assertEqual(code, collect.RETRY_EXIT)
+    self.assertNotIn("_retry", written)
 
 
 class WriteJsonTest(TempDirTest):

@@ -26,10 +26,20 @@ Item {
   }
 
   Timer {
+    id: refreshTimer
     interval: 300000
     running: true
     repeat: true
     triggeredOnStart: true
+    onTriggered: root.collect(false)
+  }
+
+  // collect.py exits 75 when the usage API could not be reached (DNS,
+  // timeout, no route). A 401 stays on the five-minute timer.
+  Timer {
+    id: retryTimer
+    interval: 30000
+    repeat: false
     onTriggered: root.collect(false)
   }
 
@@ -48,6 +58,10 @@ Item {
     stderr: StdioCollector {
       waitForEnd: true
       onStreamFinished: if (text.trim() !== "") console.warn("cursor-usage", text.trim())
+    }
+    onExited: function(exitCode) {
+      if (exitCode === 75) retryTimer.restart()
+      else retryTimer.stop()
     }
   }
 }
